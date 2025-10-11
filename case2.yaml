@@ -1,0 +1,32 @@
+grid_size: [15, 15, 7]
+change_altitude: True # 开启3D移动
+
+# 4架无人机，起点和终点设置为对穿路径
+start_positions:
+  - [1, 1, 3]   # Drone 0: 左下角
+  - [1, 13, 3]  # Drone 1: 左上角
+  - [13, 1, 3]  # Drone 2: 右下角
+  - [13, 13, 3] # Drone 3: 右上角
+
+goal_positions:
+  - [13, 13, 3] # Drone 0 的目标在 Drone 3 的起点
+  - [13, 1, 3]  # Drone 1 的目标在 Drone 2 的起点
+  - [1, 13, 3]  # Drone 2 的目标在 Drone 1 的起点
+  - [1, 1, 3]   # Drone 3 的目标在 Drone 0 的起点
+
+# 5个障碍物，在中央形成一个拥挤的封锁区
+obstacle_cells:
+  - [7, 7, 3]  # 中心点
+  - [7, 6, 3]  # 中心点下方
+  - [7, 8, 3]  # 中心点上方
+  - [6, 7, 3]  # 中心点左侧
+  - [8, 7, 3]  # 中心点右侧
+
+# MDP模型参数
+step_cost: -1.0
+collision_penalty: -1000.0
+goal_reward: 1000.0
+discount_factor: 0.95
+max_num_steps: 150
+alpha: 0.8
+seed: 42

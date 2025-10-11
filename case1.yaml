@@ -1,0 +1,22 @@
+grid_size: [10, 10, 5]
+start_positions:
+  - [0, 2, 2]
+  - [0, 7, 2]
+
+goal_positions:
+  - [9, 3, 3] # 让目标高度不同，鼓励3D移动
+  - [9, 6, 1]
+
+obstacle_cells:
+  - [5, 7, 2]
+  - [5, 3, 2]
+
+change_altitude: True # 开启3D移动！
+
+# MDP model parameters
+step_cost: -1.0
+collision_penalty: -50.0
+goal_reward: 100.0
+discount_factor: 0.98
+max_num_steps: 100
+alpha: 0.5
