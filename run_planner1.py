@@ -2,6 +2,8 @@
 import argparse
 import time
 import sys
+import random
+import numpy as np
 from multi_drone import MultiDroneUnc
 from my_planner import MyPlanner, add_planner_args, make_planner_from_args
 
@@ -21,6 +23,10 @@ def parse_args():
     parser.add_argument(
         "--num_iterations", type=int,
         help="Number of MCTS iterations per step. Used only if --planning_time is NOT set."
+    )
+    parser.add_argument(
+        "--seed", type=int, default=0,
+        help="Random seed for reproducibility (default: 0)"
     )
 
     # Register all planner parameters (from my_planner.py)
@@ -84,6 +90,10 @@ def run(env: MultiDroneUnc, planner: MyPlanner, planning_time: float | None, num
 
 def main():
     args = parse_args()
+
+    # Set random seed for reproducibility
+    random.seed(args.seed)
+    np.random.seed(args.seed)
 
     # 1) Instantiate environment
     try:
