@@ -23,12 +23,12 @@ def parse_args():
         help="Number of MCTS iterations per step. Used only if --planning_time is NOT set."
     )
 
-    # 将所有 planner 参数注册进来（来自 my_planner.py）
+    # Register all planner parameters (from my_planner.py)
     add_planner_args(parser)
 
     args = parser.parse_args()
 
-    # 默认值：若两者都没给，默认按 1.0s/步
+    # Default: if neither is given, default to 1.0s per step
     if args.planning_time is None and args.num_iterations is None:
         args.planning_time = 1.0
 
@@ -36,7 +36,7 @@ def parse_args():
 
 
 def run(env: MultiDroneUnc, planner: MyPlanner, planning_time: float | None, num_iterations: int | None):
-    """主循环：按时间/迭代限额逐步规划与执行"""
+    """Main loop: plan and execute step by step with time/iteration budget"""
     current_state = env.reset()
     num_steps = 0
     total_discounted_reward = 0.0
@@ -85,26 +85,26 @@ def run(env: MultiDroneUnc, planner: MyPlanner, planning_time: float | None, num
 def main():
     args = parse_args()
 
-    # 1) 实例化环境
+    # 1) Instantiate environment
     try:
         env = MultiDroneUnc(args.config)
     except Exception as e:
         print(f"[ERROR] Failed to create environment from config '{args.config}': {e}")
         sys.exit(1)
 
-    # 2) 由命令行参数创建规划器（my_planner.py 提供）
+    # 2) Create planner from command-line arguments (provided by my_planner.py)
     try:
         planner = make_planner_from_args(env, args)
     except Exception as e:
         print(f"[ERROR] Failed to create planner: {e}")
         sys.exit(1)
 
-    # 3) 运行主循环
+    # 3) Run main loop
     total_discounted_reward, history, total_planning_time = run(
         env, planner, args.planning_time, args.num_iterations
     )
 
-    # 4) 打印结果
+    # 4) Print results
     print("\n" + "=" * 20 + " RESULTS " + "=" * 20)
     success = None
     if len(history) > 0 and isinstance(history[-1][-1], dict) and "success" in history[-1][-1]:
@@ -117,7 +117,7 @@ def main():
         print(f"Average planning time per step: {total_planning_time / len(history):.2f}s")
     print("=" * 50 + "\n")
 
-    # 5) 可视化（若环境支持）
+    # 5) Visualization (if environment supports)
     try:
         env.show()
     except Exception as e:

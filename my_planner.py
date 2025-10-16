@@ -10,7 +10,7 @@ from multi_drone import MultiDroneUnc
 # MCTS Node
 # ------------------------------
 class Node:
-    """MCTS 搜索树节点"""
+    """MCTS search tree node"""
     def __init__(self, state, parent=None, action=None, reward=0.0):
         self.state = np.array(state, dtype=np.int32)
         self.parent = parent
@@ -35,30 +35,30 @@ class Node:
 # ------------------------------
 class MyPlanner:
     """
-    自适应多无人机 UCT-MCTS（含对称破缺 + 交换位惩罚）
+    Adaptive multi-drone UCT-MCTS with symmetry breaking and swap risk penalty
     """
     def __init__(self, env: MultiDroneUnc,
-                 # —— 基础 —— #
+                 # Basic parameters
                  exploration_constant: float | None = 3.0,
                  rollout_epsilon: float = 0.2,
                  max_rollout_depth: int | None = 20,
-                 # —— APW / 先验 —— #
+                 # APW / Prior
                  apw_k: float = 10.0,
                  apw_alpha: float = 0.5,
                  topk_per_drone: int = 5,
                  max_prior_samples: int = 100,
-                 # —— 终局模式 —— #
+                 # Endgame mode
                  end_active_threshold: int = 2,
                  end_rollout_depth: int = 60,
                  end_epsilon: float = 0.1,
                  end_c_scale: float = 0.4,
                  heuristic_alpha: float = -5.0,
                  stay_action_index: int = 0,
-                 # —— 兼容 CLI 的可选项（即便暂不使用也要接收，避免报错） —— #
+                 # Optional CLI-compatible parameters (stored but not enforced)
                  use_clearance_gain: bool = True,
                  use_lateral_bias: bool = True,
                  asym_tau: float = 0.12,
-                 # —— 自适应 —— #
+                 # Adaptive parameters
                  auto_param: bool = True,
                  auto_adjust_period: int = 20,
                  adapt_log: bool = False):
@@ -69,7 +69,7 @@ class MyPlanner:
         self.discount_factor = cfg.discount_factor
         self.max_steps_global = cfg.max_num_steps
 
-        # 环境静态
+        # Environment static info
         self.goals = np.array(cfg.goal_positions)
         self.action_vectors = self.env._action_vectors      # (A,3)
         self.num_per_drone_actions = self.action_vectors.shape[0]
@@ -100,7 +100,7 @@ class MyPlanner:
         self.topk_per_drone = topk_per_drone
         self.max_prior_samples = max_prior_samples
 
-        # 终局
+        # Endgame parameters
         self.end_active_threshold = end_active_threshold
         self.end_rollout_depth = min(end_rollout_depth, self.max_steps_global)
         self.end_epsilon = end_epsilon
@@ -108,12 +108,12 @@ class MyPlanner:
         self.heuristic_alpha = heuristic_alpha
         self.stay_action_index = stay_action_index
 
-        # 兼容 CLI 的额外选项（本版仅存储，不强制使用）
+        # Optional CLI-compatible parameters (stored only, not enforced in this version)
         self.use_clearance_gain = use_clearance_gain
         self.use_lateral_bias = use_lateral_bias
         self._asym_tau = asym_tau
 
-        # 树重用 & 自适应
+        # Tree reuse and adaptive tuning
         self.root: Node | None = None
         self.auto_param = auto_param
         self.auto_adjust_period = max(5, int(auto_adjust_period))
@@ -122,12 +122,12 @@ class MyPlanner:
         self._stale = 0
         self._adapt_log = adapt_log
 
-    # ==================== 主入口 ====================
+    # ==================== Main entry ====================
     def plan(self, current_state: np.ndarray,
              planning_time_per_step: float | None = None,
              num_iterations: int | None = None) -> int:
 
-        # （可选）地图画像 → 初值
+        # Optional: map profiling for initial parameter adjustment
         if self.auto_param and not self._profiled:
             prof = self._profile_map(current_state)
             self._apply_map_presets(prof)
@@ -136,12 +136,12 @@ class MyPlanner:
                 print(f"[ADAPT:init] c={self.c:.2f} eps={self.epsilon:.2f} depth={self.max_rollout_depth} "
                       f"topk={self.topk_per_drone} prior={self.max_prior_samples}")
 
-        # 提前判终
+        # Early termination check
         _, _, root_done, _ = self.env.simulate(current_state, self.stay_action_index)
         if root_done:
             return self.stay_action_index
 
-        # 树重用
+        # Tree reuse
         if self.root is not None:
             matched = None
             for child in self.root.children.values():
@@ -158,7 +158,7 @@ class MyPlanner:
             self.root = Node(state=current_state)
             self.root.untried_actions = self._get_prioritized_actions(current_state)
 
-        # 预算循环
+        # Planning budget loop
         start = time.time()
         iters = 0
         use_time = planning_time_per_step is not None
@@ -174,7 +174,7 @@ class MyPlanner:
             self._run_mcts_iteration(self.root)
             iters += 1
 
-            # 在线微调
+            # Online parameter adjustment
             if self.auto_param and (iters % self.auto_adjust_period == 0):
                 self._online_adjust(self.root)
                 if self._adapt_log:
@@ -186,11 +186,11 @@ class MyPlanner:
         if not self.root.children:
             return self._get_greedy_action(current_state)
 
-        # 根下选访问次数最大
+        # Select action with most visits at root
         best_action = max(self.root.children, key=lambda a: self.root.children[a].visits)
         return best_action
 
-    # ==================== MCTS 四步 ====================
+    # ==================== MCTS four phases ====================
     def _run_mcts_iteration(self, root: Node):
         leaf = self._select_and_expand(root)
         rollout_ret = self._rollout(leaf.state, leaf.depth)
@@ -199,7 +199,7 @@ class MyPlanner:
     def _select_and_expand(self, node: Node) -> Node:
         cur = node
         while not cur.is_terminal:
-            # APW：限制开放孩子数量随访问数次幂增长
+            # APW: limit children expansion based on visit count
             if len(cur.children) < self.apw_k * (cur.visits ** self.apw_alpha):
                 if not cur.is_fully_expanded():
                     a = cur.untried_actions.pop(0)
@@ -218,7 +218,7 @@ class MyPlanner:
         return cur
 
     def _rollout(self, state: np.ndarray, depth: int) -> float:
-        """终局自适应（更深、更贪心），截断用启发式兜底"""
+        """Endgame-adaptive rollout with deeper/greedier exploration, heuristic backup for truncation"""
         total = 0.0
         s = np.copy(state)
         gamma = self.discount_factor
@@ -262,7 +262,7 @@ class MyPlanner:
             G = cur.reward_from_parent + gamma * G
             cur = cur.parent
 
-    # ==================== 组件：UCT/先验 ====================
+    # ==================== Components: UCT/Prior ====================
     def _best_child_uct(self, node: Node) -> Node:
         c_use = self.c * (self.end_c_scale if self._is_endgame(node.state) else 1.0)
         logN = math.log(max(node.visits, 1) + 1.0)
@@ -287,9 +287,9 @@ class MyPlanner:
 
     def _get_prioritized_actions(self, state: np.ndarray) -> list[int]:
         """
-        启发式先验（加入障碍物感知 + 对称破缺/交换位惩罚）：
-        - 终局：冻结已到达无人机，只允许 stay（极大收缩联合动作）
-        - 非终局：每机取 top-k "到目标更近 + 障碍物安全 + 惩罚更小"的动作，采样笛卡尔组合
+        Heuristic action prioritization with obstacle awareness and symmetry breaking:
+        - Endgame: freeze reached drones to stay action (drastically reduces joint action space)
+        - Otherwise: take top-k actions per drone based on goal proximity, obstacle safety, and penalty reduction
         """
         num_drones = state.shape[0]
         pos = state[:, :3]
@@ -309,22 +309,22 @@ class MyPlanner:
                 for a in range(self.num_per_drone_actions):
                     tgt = pos[i] if a == self.stay_action_index else (pos[i] + self.action_vectors[a])
 
-                    # 障碍物惩罚
+                    # Obstacle penalty
                     tx, ty, tz = np.clip(tgt, [0, 0, 0], [X-1, Y-1, Z-1]).astype(int)
                     obs_dist = float(self.env.dist_field[tx, ty, tz])
                     obstacle_penalty = max(0, 3.0 - obs_dist) * 3.0
 
-                    # 对称破缺和交换位惩罚
+                    # Symmetry breaking and swap risk penalties
                     sym_pen = self._right_of_way_penalty(i, state, tgt)
                     swap_pen = self._swap_risk_penalty(i, state, tgt)
 
-                    # 合并所有惩罚
+                    # Combine all penalties
                     adj[a] += obstacle_penalty - (sym_pen + swap_pen)
-                # 取前 k 个动作
+                # Select top-k actions
                 idx = np.argsort(adj)
                 per_top.append(idx[:k].tolist())
 
-        # 组合：先最佳，再采样
+        # Combine: best first, then sample
         prioritized: list[int] = []
         best_combo = [tops[0] for tops in per_top]
         prioritized.append(self.env._encode_action(np.array(best_combo, dtype=np.int32)))
@@ -343,7 +343,7 @@ class MyPlanner:
 
         return prioritized
 
-    # ==================== 组件：Rollout 策略 ====================
+    # ==================== Components: Rollout policy ====================
     def _rollout_policy(self, state: np.ndarray,
                         greedy: bool = False,
                         epsilon_override: float | None = None) -> int:
@@ -355,16 +355,16 @@ class MyPlanner:
         per_sorted = []
         active_mask, reached = self._active_drones_mask(state)
 
-        # 每机：按 "到目标距离 + 障碍物惩罚 + 对称破缺/交换位惩罚(转为正向代价)" 排序
+        # Per-drone sorting by goal distance + obstacle penalty + symmetry breaking/swap risk penalties
         X, Y, Z = self.env.cfg.grid_size
         for i in range(num_drones):
             if reached[i]:
                 per_sorted.append([self.stay_action_index])
             else:
-                # 原始曼哈顿距离
+                # Base Manhattan distance
                 base_dist = np.sum(np.abs(state[i, :3] + self.action_vectors - self.goals[i]), axis=1)
 
-                # 把惩罚（原来返回<=0）转成正向"加价"，避免直冲/交换位/撞障碍物
+                # Convert penalties (negative values) to positive cost increases
                 adj = base_dist.astype(float).copy()
                 for a in range(self.num_per_drone_actions):
                     if a == self.stay_action_index:
@@ -372,23 +372,23 @@ class MyPlanner:
                     else:
                         tgt = state[i, :3] + self.action_vectors[a]
 
-                    # 障碍物惩罚：离障碍物越近，代价越高
+                    # Obstacle penalty: closer to obstacle = higher cost
                     tx, ty, tz = np.clip(tgt, [0, 0, 0], [X-1, Y-1, Z-1]).astype(int)
                     obs_dist = float(self.env.dist_field[tx, ty, tz])
-                    # 距离<3时施加惩罚，距离越近惩罚越重
+                    # Apply penalty when distance < 3, heavier penalty when closer
                     obstacle_penalty = max(0, 3.0 - obs_dist) * 3.0
 
-                    # 对称破缺和交换位惩罚
+                    # Symmetry breaking and swap risk penalties
                     sym_pen = self._right_of_way_penalty(i, state, tgt)   # <= 0
                     swap_pen = self._swap_risk_penalty(i, state, tgt)     # <= 0
 
-                    # 合并所有惩罚
-                    adj[a] += obstacle_penalty - (sym_pen + swap_pen)  # 负负得正，等效"加价"
+                    # Combine all penalties (negative penalties become positive costs)
+                    adj[a] += obstacle_penalty - (sym_pen + swap_pen)
 
-                # 由小到大排序（越小越好）
+                # Sort ascending (lower is better)
                 per_sorted.append(list(np.argsort(adj)))
 
-        # 冲突解冲：从各自最优开始，冲突方后移
+        # Conflict resolution: start from each drone's best, losers backoff
         p_idx = np.zeros(num_drones, dtype=int)
         for _ in range(num_drones + 1):
             intended = np.zeros(num_drones, dtype=int)
@@ -414,13 +414,13 @@ class MyPlanner:
                 if p_idx[i] + 1 < len(per_sorted[i]):
                     p_idx[i] += 1
                 else:
-                    # 退化：随机一个动作（保留一定探索）
+                    # Fallback: random action to maintain exploration
                     p_idx[i] = random.randint(0, len(per_sorted[i]) - 1)
 
-        # 仍冲突则全局随机
+        # Still conflicting: global random
         return random.randint(0, self.env.num_actions - 1)
 
-    # ==================== 工具/启发 ====================
+    # ==================== Utilities and heuristics ====================
     def _active_drones_mask(self, state: np.ndarray):
         reached = state[:, 3].astype(bool)
         active_mask = ~reached
@@ -454,10 +454,11 @@ class MyPlanner:
 
         return self.heuristic_alpha * float(d_goal) + 0.08 * float(sep)
 
-    # ======= NEW: 对称破缺 & 交换位惩罚（关键补丁） =======
+    # Symmetry breaking and swap risk penalty (critical patch)
     def _swap_risk_penalty(self, i: int, state: np.ndarray, tgt: np.ndarray) -> float:
         """
-        若我打算走到另一机当前格，且对方朝我方向的目标更近，则判为高风险交换位，强惩罚。
+        If planning to move to another drone's current cell while that drone's goal direction aligns
+        with moving towards me, apply heavy penalty to avoid high-risk position swapping.
         """
         me = state[i, :3]
         pen = 0.0
@@ -468,18 +469,19 @@ class MyPlanner:
             if np.array_equal(tgt, other):
                 dir_to_me = np.sign(me - other)
                 goal_dir = np.sign(self.goals[j] - other)
-                if np.dot(dir_to_me[:2], goal_dir[:2]) > 0:  # 水平面方向一致 -> 很可能朝我来
+                if np.dot(dir_to_me[:2], goal_dir[:2]) > 0:  # Horizontal direction aligned -> likely coming towards me
                     pen -= 6.0
         return pen
 
     def _right_of_way_penalty(self, i: int, state: np.ndarray, tgt: np.ndarray) -> float:
         """
-        简单“让行权”：同一行/列正面接近时，仅较小编号直行优先，另一方直行小幅惩罚，促使侧移/等待。
+        Simple right-of-way rule: when approaching head-on in same row/column,
+        lower-indexed drone has priority; higher-indexed drone gets penalty to encourage sidestepping/waiting.
         """
         me = state[i, :3]
         step = tgt - me
         if abs(step[2]) != 0 or (abs(step[0]) + abs(step[1]) != 1):
-            return 0.0  # 只在水平直行一步时触发
+            return 0.0  # Only trigger for horizontal single-step moves
         pen = 0.0
         for j in range(state.shape[0]):
             if j == i or state[j, 3] == 1:
@@ -488,11 +490,11 @@ class MyPlanner:
             same_row = (other[1] == me[1]) and (step[1] == 0) and (np.sign(other[0]-me[0]) == np.sign(step[0]))
             same_col = (other[0] == me[0]) and (step[0] == 0) and (np.sign(other[1]-me[1]) == np.sign(step[1]))
             if same_row or same_col:
-                if not (i < j):  # 小编号优先
+                if not (i < j):  # Lower index has priority
                     pen -= 2.5
         return pen
 
-    # ==================== 自适应：地图画像 & 在线微调 ====================
+    # ==================== Adaptive tuning ====================
     def _profile_map(self, state: np.ndarray) -> dict:
         rho = 0.5
         if hasattr(self.env, "obstacle_density"):
@@ -518,33 +520,33 @@ class MyPlanner:
         self.apw_k = 8
 
     def _online_adjust(self, root: "Node"):
-        # 终局阶段检测：当部分无人机已到达时，降低探索以便精确进入终点
+        # Endgame detection: when some drones have reached, reduce exploration for precise final approach
         num_reached = int(np.sum(root.state[:, 3] == 1))
         num_total = root.state.shape[0]
 
-        # 如果半数以上无人机已到达，衰减c以转向exploitation
+        # If more than half of drones have reached, decay c to shift towards exploitation
         if num_reached >= num_total // 2:
             old_c = self.c
-            self.c *= 0.85  # 回退到之前的衰减率
+            self.c *= 0.85  # Revert to previous decay rate
             self.c = float(np.clip(self.c, 0.01, self.c_max))
             if np.isnan(self.c) or np.isinf(self.c):
                 self.c = 1.0
-            # 只在第一次进入终局或c变化>10%时打印，避免刷屏
+            # Only print on first entry to endgame or if c changes > 10%, to avoid spam
             if not hasattr(self, '_in_endgame') or abs(old_c - self.c) / old_c > 0.1:
                 print(f"[ENDGAME] {num_reached}/{num_total} reached | c: {old_c:.2f} -> {self.c:.2f}")
                 self._in_endgame = True
-            return  # 跳过常规调整
+            return  # Skip regular adjustment
 
-        # 前期：基于visit分布的常规调整
+        # Early phase: regular adjustment based on visit distribution
         totalN = sum(ch.visits for ch in root.children.values()) + 1e-9
         maxN = max((ch.visits for ch in root.children.values()), default=0)
         p_star = maxN / totalN
         old_c = self.c
 
-        if p_star < 0.35:      # 过散 → 增探索
+        if p_star < 0.35:      # Too dispersed → increase exploration
             self.c += np.tanh(0.15)
             adj_type = "INC"
-        elif p_star > 0.60:    # 过集 → 降探索
+        elif p_star > 0.60:    # Too concentrated → decrease exploration
             self.c += -np.tanh(0.10)
             adj_type = "DEC"
         else:
@@ -577,33 +579,33 @@ class MyPlanner:
 
 
 # ------------------------------
-# （可选）命令行参数接入
+# Optional CLI parameter interface
 # ------------------------------
 def add_planner_args(parser):
     p = parser
-    # 基础
+    # Basic parameters
     p.add_argument("--exploration_constant", type=float, default=3.0)
     p.add_argument("--rollout_epsilon", type=float, default=0.2)
     p.add_argument("--max_rollout_depth", type=int, default=20)
-    # 先验/APW
+    # Prior/APW
     p.add_argument("--apw_k", type=float, default=10.0)
     p.add_argument("--apw_alpha", type=float, default=0.5)
     p.add_argument("--topk_per_drone", type=int, default=5)
     p.add_argument("--max_prior_samples", type=int, default=100)
-    # 终局（建议 1，更利于收口；你也可覆盖）
+    # Endgame (recommended 1 for better convergence; can be overridden)
     p.add_argument("--end_active_threshold", type=int, default=1)
     p.add_argument("--end_rollout_depth", type=int, default=60)
     p.add_argument("--end_epsilon", type=float, default=0.1)
     p.add_argument("--end_c_scale", type=float, default=0.4)
     p.add_argument("--heuristic_alpha", type=float, default=-5.0)
     p.add_argument("--stay_action_index", type=int, default=0)
-    # 兼容（即便当前版未使用，也允许从 CLI 传入而不报错）
+    # Compatibility (allow CLI input even if not currently used, to avoid errors)
     p.add_argument("--use_clearance_gain", action="store_true", default=True)
     p.add_argument("--no_use_clearance_gain", dest="use_clearance_gain", action="store_false")
     p.add_argument("--use_lateral_bias", action="store_true", default=True)
     p.add_argument("--no_use_lateral_bias", dest="use_lateral_bias", action="store_false")
     p.add_argument("--asym_tau", type=float, default=0.12)
-    # 自适应
+    # Adaptive parameters
     p.add_argument("--auto_param", action="store_true", default=True)
     p.add_argument("--no_auto_param", dest="auto_param", action="store_false")
     p.add_argument("--auto_adjust_period", type=int, default=20)
@@ -626,11 +628,11 @@ def make_planner_from_args(env, args) -> MyPlanner:
         end_c_scale=args.end_c_scale,
         heuristic_alpha=args.heuristic_alpha,
         stay_action_index=args.stay_action_index,
-        # 兼容 CLI 传参
+        # CLI compatibility
         use_clearance_gain=args.use_clearance_gain,
         use_lateral_bias=args.use_lateral_bias,
         asym_tau=args.asym_tau,
-        # 自适应
+        # Adaptive parameters
         auto_param=args.auto_param,
         auto_adjust_period=args.auto_adjust_period,
         adapt_log=args.adapt_log,
